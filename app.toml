@@ -1,0 +1,38 @@
+record_device = "Trust"
+
+ollama_url = "http://localhost"
+ollama_port = 11434
+# Be sure to adjust this to select the model you want
+ollama_model = "gemma3:27b"
+
+font_size = 17.0
+
+w = 850
+h = 800
+
+# Download Whisper model file and set the location here
+whisper_model = "/mnt/var2/ggml-large-v3-turbo.bin"
+
+# For streaming responses to text field
+# Might be made a little bit faster
+chat_msg_wait = 500
+
+[gpt]
+key = "[Chat GPT Api key here]"
+url = "https://api.openai.com/v1/"
+model = "gpt-4o"
+
+[deepseek]
+key = "[Deepseek Api key here]"
+url = "https://api.deepseek.com/"
+model = "deepseek-chat"
+
+[eleven]
+key = "[Elevenlabs Api key]"
+url = ""
+model = "Mimi"
+
+[grok]
+key = ""
+url = ""
+model = ""
