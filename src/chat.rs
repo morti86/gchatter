@@ -1,16 +1,17 @@
 use std::sync::Arc;
 use anyhow::Result;
-use gtk::prelude::TextBufferExt;
+use gtk::{prelude::TextBufferExt, glib};
 use openai::{
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole}, Credentials
 };
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{error::TryRecvError, Sender};
 use crate::context::Context;
 use tracing::{info, debug, error};
 use ollama_rs::generation::completion::request::GenerationRequest;
 use tokio_stream::StreamExt;
 use crate::helper::convert_text;
-use std::io::Write;
+//use std::io::Write;
+use crate::helper::ResultTextMessage;
 
 pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     let ai_chat = ctx.ai_chat.lock().await;
@@ -40,7 +41,6 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     info!("Config URL: {}", url);
     let api_key = ai_conf.key;
     let model = ai_conf.model;
-    let result_buffer = ctx.result_buffer().await;
     let text_buffer = ctx.text_buffer().await;
 
     let prompt = crate::get_text!(text_buffer).to_string();
@@ -67,9 +67,10 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     debug!("Completions ready");
 
     let mut d = true;
-    let mut end_iter = result_buffer.end_iter();
     let dur = std::time::Duration::from_millis(wait);
-    
+    let result_buffer = ctx.result_buffer().await;
+    let mut end_iter = result_buffer.end_iter();
+
     while d {
         let r = cc.try_recv();
         match r {
@@ -78,13 +79,14 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
                 if let Some(content) = &choice.delta.content {
                     debug!("Received content: {}", content);
                     result_buffer.insert(&mut end_iter, content.as_str());
+                    //result_buffer.set_text(content.as_str());
                 } else {
                     debug!("I don't know what to do with it");
                 }
             }
             Err(TryRecvError::Empty) => {
                 debug!("Empty stream");
-                tokio::time::sleep(dur).await;
+                glib::timeout_future(dur).await;
                 debug!("Empty stream: awake");
             }
             Err(TryRecvError::Disconnected) => {
@@ -96,14 +98,14 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
 
     info!("Stream finished");
 
+    let result_buffer = result_buffer.clone();
+
     let text = crate::get_text!(result_buffer);
     let c_text = convert_text(text.as_str());
     result_buffer.set_text("");
     let mut end_iter = result_buffer.end_iter();
-    let mut file = std::fs::File::create("foo.txt")?;
-    file.write_all(c_text.as_bytes())?;
     result_buffer.insert_markup(&mut end_iter, c_text.as_str());
-
+    drop(cc);
     info!("Ending chat");
     Ok(())
 }
