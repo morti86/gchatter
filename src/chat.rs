@@ -10,6 +10,7 @@ use tracing::{info, debug, error};
 use ollama_rs::generation::completion::request::GenerationRequest;
 use tokio_stream::StreamExt;
 use crate::helper::convert_text;
+use std::io::Write;
 
 pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     let ai_chat = ctx.ai_chat.lock().await;
@@ -67,6 +68,7 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
 
     let mut d = true;
     let mut end_iter = result_buffer.end_iter();
+    let dur = std::time::Duration::from_millis(wait);
     
     while d {
         let r = cc.try_recv();
@@ -76,12 +78,14 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
                 if let Some(content) = &choice.delta.content {
                     debug!("Received content: {}", content);
                     result_buffer.insert(&mut end_iter, content.as_str());
+                } else {
+                    debug!("I don't know what to do with it");
                 }
             }
             Err(TryRecvError::Empty) => {
                 debug!("Empty stream");
-                let d = std::time::Duration::from_millis(wait);
-                tokio::time::sleep(d).await;
+                tokio::time::sleep(dur).await;
+                debug!("Empty stream: awake");
             }
             Err(TryRecvError::Disconnected) => {
                 debug!("** DC **");
@@ -96,6 +100,8 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     let c_text = convert_text(text.as_str());
     result_buffer.set_text("");
     let mut end_iter = result_buffer.end_iter();
+    let mut file = std::fs::File::create("foo.txt")?;
+    file.write_all(c_text.as_bytes())?;
     result_buffer.insert_markup(&mut end_iter, c_text.as_str());
 
     info!("Ending chat");

@@ -1,6 +1,7 @@
 use gtk::{DropDown, StringList};
 use pv_recorder::PvRecorderBuilder;
 use pulldown_cmark::{Parser, Options, html};
+use regex::Regex;
 
 // Gets the drop down with devices
 pub fn device_dd() -> DropDown {
@@ -318,30 +319,47 @@ pub fn convert_text(text: &str) -> String {
     pango
 }
 
+fn replace_tag(text: &str, from: &str, to: &str) -> String {
+    let r_open = Regex::new(format!(r"<{}\b[^>]*>", from).as_str()).unwrap();
+    let r_close = Regex::new(format!(r"</{}\b[^>]*>", from).as_str()).unwrap();
+
+    let open = if to == "" { String::new() } else { format!("<{}>", to) };
+    let close = if to == "" { String::new() } else { format!("</{}>", to) };
+    let res = r_open.replace_all(text, open).to_string();
+    let res = r_close.replace_all(res.as_str(), close).to_string();
+
+    res
+}
+
 // Basic HTML to Pango markup converter (simplified)
 fn html_to_pango(html: &str) -> String {
-    html.replace("<strong>", "<b>")
+    let res = html.replace("<strong>", "<b>")
         .replace("</strong>", "</b>")
         .replace("<em>", "<i>")
         .replace("</em>", "</i>")
-        .replace("<p>", "")
-        .replace("</p>", "")
         .replace("<br>", "")
         .replace("<br/>", "")
-        .replace("<ul>", "")
-        .replace("</ul>", "")
-        .replace("<ol>", "")
-        .replace("</ol>", "")
         .replace("<li>", "- ")
         .replace("</li>", "")
-        .replace("<code>", "<tt>")
-        .replace("</code>", "</tt>")
+        .replace("<pre>", "")
+        .replace("</pre>", "")
         .replace("<h3>", "<span foreground=\"red\"><b>")
         .replace("</h3>", "</b></span>")
         .replace("<h2>", "<big><span foreground=\"green\">")
         .replace("</h2>", "</span></big>")
         .replace("<h1>", "<big><span foreground=\"red\">")
-        .replace("</h1>", "</span></big>")
+        .replace("</h1>", "</span></big>");
+
+    let res = replace_tag(res.as_str(), "code", "tt");
+    let res = replace_tag(res.as_str(), "ol", "");
+    let res = replace_tag(res.as_str(), "ul", "");
+    let res = replace_tag(res.as_str(), "p", "");
+
+    let re_open = Regex::new(r"<h[4-6]>").unwrap();
+    let res = re_open.replace_all(res.as_str(), "<big>").to_string();
+    let re_open = Regex::new(r"<h/[4-6]>").unwrap();
+    let res = re_open.replace_all(res.as_str(), "</big>").to_string();
+    res.to_string()
 
         // Add more conversions as needed
 }
