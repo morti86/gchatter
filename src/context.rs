@@ -29,6 +29,7 @@ pub struct Context {
     pub language: Mutex<Option<Language>>,
     pub conf: Config,
     pub ai_chat: Mutex<Option<crate::AiChat>>,
+    pub with_sound: Mutex<bool>,
 }
 
 unsafe impl Send for Context {}
@@ -148,6 +149,7 @@ impl Context {
                     ).unwrap_or(std::fs::read_to_string("./app.toml").unwrap()).as_str() 
                 ).unwrap(),
             ai_chat: Mutex::new(Some(crate::AiChat::ChatGPT)),
+            with_sound: Mutex::new(false),
         }
     }
 

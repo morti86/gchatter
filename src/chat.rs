@@ -4,16 +4,16 @@ use gtk::{prelude::TextBufferExt, glib};
 use openai::{
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole}, Credentials
 };
-use tokio::sync::mpsc::{error::TryRecvError, Sender};
+use tokio::sync::mpsc::error::TryRecvError;
 use crate::context::Context;
 use tracing::{info, debug, error};
 use ollama_rs::generation::completion::request::GenerationRequest;
 use tokio_stream::StreamExt;
 use crate::helper::convert_text;
+use async_channel::Sender;
 //use std::io::Write;
-use crate::helper::ResultTextMessage;
 
-pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
+pub async fn ask_chat(ctx: Arc<Context>, sx: Sender<String>) -> Result<()> {
     let ai_chat = ctx.ai_chat.lock().await;
     let aic = ai_chat.clone();
     let wait = ctx.conf.chat_msg_wait;
@@ -70,6 +70,8 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     let dur = std::time::Duration::from_millis(wait);
     let result_buffer = ctx.result_buffer().await;
     let mut end_iter = result_buffer.end_iter();
+    let mut vc = vec![];
+    let play = ctx.with_sound.lock().await;
 
     while d {
         let r = cc.try_recv();
@@ -79,7 +81,17 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
                 if let Some(content) = &choice.delta.content {
                     debug!("Received content: {}", content);
                     result_buffer.insert(&mut end_iter, content.as_str());
-                    //result_buffer.set_text(content.as_str());
+                    let has_dot = content.contains(".") || content.contains("。");
+                    if *play {
+                        vc.push(content.clone());
+                        if has_dot && vc.len() > 10 {
+                            match sx.send(vc.join(" ")).await {
+                                Ok(_) => vc.clear(),
+                                Err(e) => error!("Error sending: {}", e.to_string()),
+                            }
+                        }
+                    }
+                    
                 } else {
                     debug!("I don't know what to do with it");
                 }
@@ -91,10 +103,19 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
             }
             Err(TryRecvError::Disconnected) => {
                 debug!("** DC **");
+                vc.push(String::from("~END~"));
                 d = false;
             }
         }
     }
+
+    if vc.len() > 0 {
+        match sx.send(vc.join(" ")).await {
+            Ok(_) => vc.clear(),
+            Err(e) => error!("Error sending: {}", e.to_string()),
+        }
+    }
+
 
     info!("Stream finished");
 
@@ -110,7 +131,7 @@ pub async fn ask_chat(ctx: Arc<Context>) -> Result<()> {
     Ok(())
 }
 
-pub async fn ask_ollama(app_state: Arc<Context>) {
+pub async fn ask_ollama(app_state: Arc<Context>, sx: Sender<String>) {
     let result_buffer = app_state.result_buffer().await;
     let text_buffer = app_state.text_buffer().await;
     let prompt = crate::get_text!(text_buffer);
@@ -120,20 +141,42 @@ pub async fn ask_ollama(app_state: Arc<Context>) {
     let request = GenerationRequest::new(model, prompt.as_str());
 
     let mut stream = ollama.generate_stream(request).await.unwrap();
+    let play = app_state.with_sound.lock().await;
+    let mut vc = vec![];
 
     while let Some(res) = stream.next().await {
         match res {
             Ok(responses) => {
                 let mut end_iter = result_buffer.end_iter();
-                for r in responses {
-                    result_buffer.insert(&mut end_iter, &r.response);
+                if *play {
+                    for r in responses {
+                        let content = &r.response;
+                        let has_dot = content.contains(".") || content.contains("。");
+                        result_buffer.insert(&mut end_iter, content);
+                        vc.push(content.clone());
+                        if has_dot || vc.len() > 10 {
+                            match sx.send(vc.join(" ")).await {
+                                Ok(_) => vc.clear(),
+                                Err(e) => error!("Error sending: {}", e.to_string()),
+                            }
+                        }
+
+                    }
                 }
             },
             Err(e) => eprintln!("Error: {}", e),
         }
     } 
 
-    info!("Stream finished");
+    info!("Stream finished"); 
+
+    if vc.len() > 0 {
+        match sx.send(vc.join(" ")).await {
+            Ok(_) => vc.clear(),
+            Err(e) => error!("Error sending: {}", e.to_string()),
+        }
+    }
+
 
     let text = crate::get_text!(result_buffer);
     let c_text = convert_text(text.as_str());

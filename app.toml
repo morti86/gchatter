@@ -30,7 +30,7 @@ model = "deepseek-chat"
 [eleven]
 key = "[Elevenlabs Api key]"
 url = ""
-model = "Mimi"
+model = "FGY2WhTYpPnrIDTdsKH5"
 
 [grok]
 key = ""

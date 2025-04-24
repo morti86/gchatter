@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 use gtk::prelude::*;
-use gtk::{glib, Application, ApplicationWindow, Button, ScrolledWindow, TextView, Box, DropDown, Label};
+use gtk::{glib, Application, ApplicationWindow, Button, ScrolledWindow, TextView, Box, DropDown, Label, CheckButton};
 use std::sync::Arc;
 use crate::context::Context;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 mod context;
 mod helper;
@@ -14,7 +14,11 @@ mod transcribe;
 make_enum!(AiChat, [ChatGPT, Grok, Deepseek, Ollama]);
 make_enum!(Language, [EN,PL,CN,DE,FR,ES,RU,TR,JP]);
 
-const APP_NAME: &str = "gChatter 0.2.1";
+use elevenlabs_rs::{ElevenLabsClient, Model};
+use elevenlabs_rs::endpoints::genai::tts::{TextToSpeech, TextToSpeechBody};
+use elevenlabs_rs::utils::play;
+
+const APP_NAME: &str = "gChatter 0.3.0";
 const APP_ID: &str = "org.gnome.gChatter.Devel";
 
 fn build_ui(app: &Application) {
@@ -44,6 +48,38 @@ fn build_ui(app: &Application) {
 
     let ctx = Arc::new(Context::new(&text_view.buffer(), &result_view.buffer()));
     debug!("Context ready");
+
+    let (chat_sx,chat_rx) = async_channel::unbounded::<String>();
+    let st = ctx.clone();
+    let elh = tokio::spawn(async move {
+    let st = st.clone();
+        if let Some(c) = &st.conf.eleven {
+            let key = &c.key;
+            //let url = &c.url;
+            let voice = &c.model;
+            let client = ElevenLabsClient::new(key.as_str());
+            info!("Found elevenlabs config");
+            while let Ok(txt) = chat_rx.recv().await {
+                if !txt.chars().any(|c| matches!(c, 'a'..='z')) {
+                    // Skip if nothing to read.
+                    continue;
+                }
+                debug!("read: {}", txt);
+                let body = TextToSpeechBody::new(txt)
+                    .with_model_id(Model::ElevenMultilingualV2);
+                let endpoint = TextToSpeech::new(voice, body);
+                match client.hit(endpoint).await {
+                    Ok(speech) => {
+                        debug!("playing");
+                        crate::report_err!(play(speech));
+                    }
+                    Err(e) => {
+                        error!("tts error: {}", e.to_string());
+                    }
+                }
+            }
+        }
+    });
 
     let ai_sel = enum_dd!(AiChat, 0, 100);
     let st = ctx.clone();
@@ -94,6 +130,22 @@ fn build_ui(app: &Application) {
         .label("Rec")
         .margin_start(5)
         .build();
+
+    let idc_play = CheckButton::builder()
+        .label("Play")
+        .build();
+
+    let st = ctx.clone();
+    idc_play.connect_toggled(move |b| {
+        let v = b.is_active();
+        let st = st.clone();
+        glib::spawn_future_local(async move {
+            let mut p = st.with_sound.lock().await;
+            *p = v;
+            debug!("Set play to {}", v);
+        });
+        
+    });
 
     let (sx,rx) = async_channel::unbounded::<bool>();
     let s = sx.clone();
@@ -191,31 +243,6 @@ fn build_ui(app: &Application) {
     //let ask_rc = std::rc::Rc
     connect_text_buffer_to_button(&text_view, &idc_ask);
 
-    //#[cfg(any(feature = "leptess", feature = "paddleocr"))]
-    /*let idc_ocr = Button::builder()
-        .label("OCR")
-        .build();
-
-    let st = ctx.clone();
-    idc_ocr.connect_clicked(move |_| {
-        let st = st.clone();
-        glib::spawn_future_local(async move {
-            let lang = st.language.lock().await.clone();
-            match lang {
-                Some(lang) => {
-                    if lang == Language::CN {
-                    } else {
-
-                    }
-                }
-                None => {
-                    error!("Language undefined");
-                }
-            }
-        });
-        
-    });*/ 
-
     let idc_clearq = Button::builder()
         .label("CQ")
         .width_request(60)
@@ -236,14 +263,16 @@ fn build_ui(app: &Application) {
 
 
     let hbox = row!(5,[ai_sel, ids_dev, devices, status_label]);
-    let bhbox = row!(5,[idc_ask, idc_rec, language_sel, idc_tr, idc_clearq]);
+    let bhbox = row!(5,[idc_ask, idc_rec, language_sel, idc_tr, idc_clearq, idc_play]);
     let vbox = column![text_view, s_result_view, hbox, bhbox];
 
     let st = ctx.clone();
     let st2 = ctx.clone();
+
     idc_ask.connect_clicked(move |_| {
         let st = st.clone();
         let st2 = st2.clone();
+        let chat_sx = chat_sx.clone();
         glib::spawn_future_local(async move {
             let ai = st.ai_chat.lock().await.clone();
             let result_buffer = st.result_buffer().await;
@@ -251,12 +280,14 @@ fn build_ui(app: &Application) {
             match ai {
                 Some(AiChat::Ollama) => {
                     glib::spawn_future_local(async move {
-                        chat::ask_ollama(st2).await;
+                        let chat_sx = chat_sx.clone();
+                        chat::ask_ollama(st2, chat_sx).await;
                     });
                 }
                 Some(AiChat::Grok) | Some(AiChat::ChatGPT) | Some(AiChat::Deepseek) => {
                     glib::spawn_future_local(async move {
-                        if let Err(e) = chat::ask_chat(st2).await {
+                        let chat_sx = chat_sx.clone();
+                        if let Err(e) = chat::ask_chat(st2, chat_sx).await {
                             error!("Error asking online chat: {}", e.to_string());
                         }
                     });
@@ -273,6 +304,7 @@ fn build_ui(app: &Application) {
     window.present();
     window.connect_close_request(move |_| {
         let st = ctx.clone();
+        elh.abort();
         glib::spawn_future_local(async move {
             st.dispose().await.expect("Disposing failed, you may need to shut me down by force");
         });
