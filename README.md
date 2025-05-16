@@ -1,3 +1,5 @@
+## Unmaintained: use aivchat instead
+
 # gchatter
 AI voice chat appliation - talk with a selected AI chat using your microphone and headphones.
 - either type your question or record it
